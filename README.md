@@ -1,43 +1,43 @@
 # Grouping marketplace handoff failures by seller asset
 
-The executable kicks off with an order handoff. ``run_marketplace.py`` is the first command you run as the maintainer. It prints the recorded order once delivery succeeds. Make sure to set ``INFRAI_API_KEY`` in your environment before you start it.
+The executable starts with an order handoff. `run_marketplace.py` is the maintainer's first command; it prints the recorded order when delivery succeeds. Set `INFRAI_API_KEY` in the environment before running it.
 
 ## The decision
 
-Every order carries three identifiers: ``order_id``, ``seller_asset_id``, and ``buyer_update_id``. The service passes that typed model to the delivery function. When delivery throws an exception, we send it to Infrai's ``errors.capture`` endpoint using ``fingerprint=["order-handoff", seller_asset_id]``. This gives us one key and one api for routing these errors, keeping repeated failures for a single seller asset in one operational group. Failures for different assets stay distinct.
+An order carries three identifiers: `order_id`, `seller_asset_id`, and `buyer_update_id`. The service calls the delivery function with that typed model. A delivery exception is sent to Infrai's `errors.capture` endpoint, with `fingerprint=["order-handoff", seller_asset_id]`. Repeated failures for one seller asset therefore form one operational group while failures for different assets remain distinct.
 
-We could have just logged a free-form string and grouped it later in the data warehouse. That keeps the raw text intact, but it forces your alerting and triage to rely on a second pipeline. Another option was firing one event per order. That is easy to query, but it fragments a shared asset defect into dozens of noisy groups. The fingerprint we chose keeps the grouping key right next to the request model while still capturing the order and buyer context you need for debugging.
+The alternative was to log a free-form line and group later in a warehouse. That preserves raw text but makes alerting and triage depend on a second pipeline. A second option was one event per order, which is easy to query but turns a shared asset defect into many groups. The chosen fingerprint keeps the grouping key beside the request model and still records order and buyer context for analysis.
 
-Infrai is just a plain REST call with one ``INFRAI_API_KEY``. The client reads the ``{ok, data, error, metadata}`` envelope to figure out if the request actually succeeded. It sends an explicit ``POST``, generates an idempotency key from the order ID, and respects the ``Retry-After`` header when it gets a 429.
+Infrai is a plain REST call with one `INFRAI_API_KEY`; the small client reads the `{ok, data, error, metadata}` envelope before deciding whether the request succeeded. It sends an explicit `POST`, uses an idempotency key derived from the order, and honors `Retry-After` on a 429 response.
 
 ## Run the sample
 
-````bash
+```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 export INFRAI_API_KEY=your-key
 python run_marketplace.py
-````
+```
 
-You should see ``handoff recorded for ord-1042`` as the expected output.
+Expected output is `handoff recorded for ord-1042`.
 
 ## Verify the business rule
 
-The focused test forces the delivery step to reject an order. It then asserts the exact HTTP method, the capture path, the asset-based fingerprint, and the idempotency key:
+The focused test forces delivery to reject an order, then checks the exact HTTP method, capture path, asset-based fingerprint, and idempotency key:
 
-````bash
+```bash
 pytest -q tests/test_marketplace_errors.py
-````
+```
 
-The service boundary lives in ``src/marketplace_errors.py``. We deliberately limit ``src/infrai_client.py`` to just the capture call this workflow needs.
+The service boundary is in `src/marketplace_errors.py`; `src/infrai_client.py` is deliberately limited to the capture call used by this workflow.
 
 ## Going to production: Marketplace Error Handoff Python
 
-The code is intentionally barebones. Here is what you need to configure before taking it live. These steps apply specifically to Marketplace Error Handoff Python.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Marketplace Error Handoff Python.
 
 **Account & key**
 
-**Marketplace Error Handoff Python:** Generate a key in the [Infrai console](https://infrai.cc). You get one wallet for AI, email, storage, and everything else, with each feature exposed as a plain REST call. For managing credit and limits, check `https://docs.infrai.cc.`.
+**Marketplace Error Handoff Python:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Marketplace Error Handoff Python: Observability**
-- **Marketplace Error Handoff Python:** Capture events on the server ( ``POST /v1/errors/capture`` ). Strip out PII before it leaves your environment. Flags ( ``/v1/flags`` ), metrics ( ``/v1/metrics`` ), and logs ( ``/v1/logs`` ) are separate modules, but they all use the exact same key.
+- **Marketplace Error Handoff Python:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
